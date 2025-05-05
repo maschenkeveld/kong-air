@@ -1,0 +1,713 @@
+name: Stage changes for Kong
+
+on:
+  push:
+    branches:
+      - main
+      # - workflow/**
+      # - contract-test
+    # paths-ignore:
+      # - 'PRD/**'
+      # - 'platform/kong/.generated/kong.yaml'
+  workflow_dispatch:
+
+jobs:
+
+#  this job is useful to debug workflows, see https://github.com/mheap/debug-artifact
+#  debug-artifacts:
+#    name: Upload Debug Artifacts
+#    runs-on: ubuntu-latest
+#    steps:
+#      - name: Upload Debug Artifacts
+#        uses: mheap/debug-artifact@v1
+#        env:
+#          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  has-changes:
+    name: Have changes in apis or common
+    runs-on: ubuntu-latest
+
+    outputs:
+      are-changes: ${{ steps.changed-files.outputs.apis-or-common }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - uses: dorny/paths-filter@v2
+        id: changed-files
+        with:
+          filters: |
+            apis-or-common:
+              - 'apis/**'
+              - 'common/**'
+  
+  oas-break:
+    name: Check breaking changes
+    needs: has-changes
+    if: ${{ needs.has-changes.outputs.are-changes == 'true' }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        app:
+          - name: alice
+            path: apis/alice/openapi-spec
+          - name: bob
+            path: apis/bob/openapi-spec
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Base OAS
+        run: |
+          git show HEAD~1:${{ matrix.app.path }}/openapi-spec.yaml > ${{ matrix.app.path }}/base.yaml
+
+      - name: Check OAS breaking changes
+        uses: oasdiff/oasdiff-action/breaking@main
+        id: oasdiff
+        with:
+          base: ${{ matrix.app.path }}/base.yaml
+          revision: ${{ matrix.app.path }}/openapi-spec.yaml
+
+      - name: Create Issue on Breaking Change
+        if: steps.oasdiff.outputs.breaking != 'No breaking changes'
+        uses: JasonEtco/create-an-issue@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP_NAME: ${{ matrix.app.name }}
+          BREAKING_CHANGES: ${{ steps.oasdiff.outputs.breaking }}
+        with:
+          filename: .github/ISSUE_TEMPLATE/breaking-change.md
+
+#   # Run contract testing with SchemaThesis.
+#   # The tests are based on the OpenAPI specifications of the services.
+#   contract-test:
+#     name: Contract testing
+#     needs: has-changes
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Checkout
+#         uses: actions/checkout@v3
+#       # Start the API implementation services and execute contract testing
+#       # If you have a schemathesis token, you can uncomment the token line and use it
+#       - name: Start services
+#         run: chmod +x run-all.sh && ./run-all.sh
+#       - name: Contract testing flights
+#         uses: schemathesis/action@v1
+#         with:
+#           schema: flight-data/flights/openapi.yaml
+#           base-url: http://localhost:8080
+#           #token: ${{ secrets.SCHEMATHESIS_TOKEN }}
+#       - name: Contract testing routes
+#         uses: schemathesis/action@v1
+#         with:
+#           schema: flight-data/routes/openapi.yaml
+#           base-url: http://localhost:8081
+#           #token: ${{ secrets.SCHEMATHESIS_TOKEN }}
+#       - name: Contract testing bookings
+#         uses: schemathesis/action@v1
+#         with:
+#           schema: sales/bookings/openapi.yaml
+#           base-url: http://localhost:8082
+#           args: '-H "x-consumer-username: dfreese"'
+#           #token: ${{ secrets.SCHEMATHESIS_TOKEN }}
+#       - name: Contract testing customer
+#         uses: schemathesis/action@v1
+#         with:
+#           schema: sales/customer/openapi.yaml
+#           base-url: http://localhost:8083
+#           args: '-H "x-consumer-username: jsmith"'
+#           #token: ${{ secrets.SCHEMATHESIS_TOKEN }}
+
+#   # Run security testing with OWASP ZAP Scan.
+#   # The test is based on the OpenAPI specifications of the services.
+#   security-test:
+#     name: Security testing
+#     runs-on: ubuntu-latest
+#     needs: has-changes
+#     strategy:
+#       matrix:
+#         app:
+#           - dir: flight-data
+#             name: flights
+#           - dir: flight-data
+#             name: routes
+#           - dir: sales
+#             name: bookings
+#           - dir: sales
+#             name: customer
+#     steps:
+#       - name: Checkout
+#         uses: actions/checkout@v3
+#       - name: Start services
+#         run: chmod +x run-all.sh && ./run-all.sh
+#       - name: Change server URL in OpenAPI
+#         # Change the server URL in the OpenAPI file to localhost
+#         # so that the security test can run against the local services
+#         run: |
+#           if [ "${{ matrix.app.name }}" == "flights" ]; then
+#             sed -i 's|url: https://api.kong-air.com|url: http://localhost:8080|' '${{ matrix.app.dir }}/${{ matrix.app.name }}/openapi.yaml'
+#           fi
+#           if [ "${{ matrix.app.name }}" == "routes" ]; then
+#             sed -i 's|url: https://api.kong-air.com|url: http://localhost:8081|' '${{ matrix.app.dir }}/${{ matrix.app.name }}/openapi.yaml'
+#           fi
+#           if [ "${{ matrix.app.name }}" == "bookings" ]; then
+#             sed -i 's|url: https://api.kong-air.com|url: http://localhost:8082|' '${{ matrix.app.dir }}/${{ matrix.app.name }}/openapi.yaml'
+#           fi
+#           if [ "${{ matrix.app.name }}" == "customer" ]; then
+#             sed -i 's|url: https://api.kong-air.com|url: http://localhost:8083|' '${{ matrix.app.dir }}/${{ matrix.app.name }}/openapi.yaml'
+#           fi
+#       - name: ZAP Scan
+#         uses: zaproxy/action-api-scan@v0.7.0
+#         with:
+#           token: ${{ secrets.GITHUB_TOKEN }}
+#           docker_name: 'ghcr.io/zaproxy/zaproxy:stable'
+#           format: openapi
+#           target: '${{ matrix.app.dir }}/${{ matrix.app.name }}/openapi.yaml'
+
+#   # Run load testing with K6. The script is generated from the OpenAPI specification.
+#   load-test:
+#     name: Load testing
+#     runs-on: ubuntu-latest
+#     needs: has-changes
+#     strategy:
+#       matrix:
+#         app:
+#           - dir: flight-data
+#             name: flights
+#           - dir: flight-data
+#             name: routes
+#           - dir: sales
+#             name: bookings
+#           - dir: sales
+#             name: customer
+#     steps:
+#       - name: Checkout
+#         uses: actions/checkout@v3
+#       - name: Change server URL in OpenAPI
+#         # Change the server URL in the OpenAPI specification to localhost
+#         # so that the load test can run against the local services
+#         run: |
+#           if [ "${{ matrix.app.name }}" == "flights" ]; then
+#             sed -i 's|url: https://api.kong-air.com|url: http://localhost:8080|' '${{ matrix.app.dir }}/${{ matrix.app.name }}/openapi.yaml'
+#           fi
+#           if [ "${{ matrix.app.name }}" == "routes" ]; then
+#             sed -i 's|url: https://api.kong-air.com|url: http://localhost:8081|' '${{ matrix.app.dir }}/${{ matrix.app.name }}/openapi.yaml'
+#           fi
+#           if [ "${{ matrix.app.name }}" == "bookings" ]; then
+#             sed -i 's|url: https://api.kong-air.com|url: http://localhost:8082|' '${{ matrix.app.dir }}/${{ matrix.app.name }}/openapi.yaml'
+#           fi
+#           if [ "${{ matrix.app.name }}" == "customer" ]; then
+#             sed -i 's|url: https://api.kong-air.com|url: http://localhost:8083|' '${{ matrix.app.dir }}/${{ matrix.app.name }}/openapi.yaml'
+#           fi
+#       - name: Generate K6 script from openapi
+#         uses: hatamiarash7/openapi-generator@v0.3.0
+#         with:
+#           openapi-file: '${{ matrix.app.dir }}/${{ matrix.app.name }}/openapi.yaml'
+#           generator: 'k6'
+#           output-dir: '${{ matrix.app.dir }}/${{ matrix.app.name }}/k6'
+#       - name: Specifiy username
+#         # if app name is bookings, use dfreese as username
+#         # change string "TODO_EDIT_THE_X-CONSUMER-USERNAME" to "dfreese" in the script.js file
+#         # if the app name is customer, use jsmith as username
+#         # change string "TODO_EDIT_THE_X-CONSUMER-USERNAME" to "jsmith" in the script.js file
+#         run: |
+#           if [ "${{ matrix.app.name }}" == "bookings" ]; then
+#             sed -i 's/TODO_EDIT_THE_X-CONSUMER-USERNAME/dfreese/g' '${{ matrix.app.dir }}/${{ matrix.app.name }}/k6/script.js'
+#           fi
+#           if [ "${{ matrix.app.name }}" == "customer" ]; then
+#             sed -i 's/TODO_EDIT_THE_X-CONSUMER-USERNAME/jsmith/g' '${{ matrix.app.dir }}/${{ matrix.app.name }}/k6/script.js'
+#           fi
+#       - name: Start services
+#         run: chmod +x run-all.sh && ./run-all.sh
+#       - name: Run load test
+#         run: |
+#           curl https://github.com/grafana/k6/releases/download/v0.52.0/k6-v0.52.0-linux-amd64.tar.gz -L | tar xvz --strip-components 1
+#           ./k6 run '${{ matrix.app.dir }}/${{ matrix.app.name }}/k6/script.js' --vus 10 --duration 10s
+
+
+#   oas-to-kong:
+#     name: Convert OAS to Kong configurations
+#     needs: [has-changes, oas-break, contract-test]
+#     if: ${{ needs.has-changes.outputs.are-changes == 'true' }}
+#     runs-on: ubuntu-latest
+#     outputs:
+#       pull-request-number: ${{ steps.create_pr.outputs.pull-request-number }}
+
+#     steps:
+#       - name: Checkout
+#         uses: actions/checkout@v3
+#       - name: Setup deck
+#         uses: kong/setup-deck@v1
+#         with:
+#           deck-version: '1.38.0'
+#           wrapper: false
+
+#       - name: Convert Flights API to Kong
+#         # In multiple steps, convert the OpenAPI Spec to a Kong declarative configuration
+#         #   and then patch the result with the data in the kong/patches.yaml
+#         #   and apply some tags
+#         run: |
+#           deck file openapi2kong -s flight-data/flights/openapi.yaml | \
+#             deck file patch flight-data/flights/kong/patches.yaml | \
+#             deck file add-tags -o .github/artifacts/kong/flight-data-flights-kong.yaml \
+#               --selector "$.services[*]" --selector "$.services[*].routes[*]" flight-data
+
+
+#       - name: Convert Routes API to Kong
+#         # In two steps, convert the OpenAPI Spec to a Kong declarative configuration
+#         #   and then patch the result with the data in the kong/patches.yaml
+#         run: |
+#           deck file openapi2kong -s flight-data/routes/openapi.yaml | \
+#             deck file patch flight-data/routes/kong/patches.yaml | \
+#             deck file add-tags -o .github/artifacts/kong/flight-data-routes-kong.yaml \
+#               --selector "$.services[*]" --selector "$.services[*].routes[*]" flight-data
+
+#       - name: Convert Bookings API to Kong
+#         # In two steps, convert the OpenAPI Spec to a Kong declarative configuration
+#         #   and then patch the result with the data in the kong/patches.yaml
+#         run: |
+#           deck file openapi2kong -s sales/bookings/openapi.yaml | \
+#             deck file patch  sales/bookings/kong/patches.yaml | \
+#             deck file add-tags -o .github/artifacts/kong/sales-bookings-kong.yaml \
+#               --selector "$.services[*]" --selector "$.services[*].routes[*]" sales
+
+#       - name: Convert Customers API to Kong
+#         # In two steps, convert the OpenAPI Spec to a Kong declarative configuration
+#         #   and then patch the result with the data in the kong/patches.yaml
+#         run: |
+#           deck file openapi2kong -s sales/customer/openapi.yaml | \
+#             deck file patch sales/customer/kong/patches.yaml | \
+#             deck file add-tags -o .github/artifacts/kong/sales-customer-kong.yaml --selector "$.services[*]" \
+#               --selector "$.services[*].routes[*]" sales
+
+#       - name: Combine Kong Configurations
+#         # Combine all the previous OAS->Kong configurations into one and put it in a well known place
+#         run: |
+#           deck file merge \
+#             .github/artifacts/kong/*-kong.yaml -o .github/artifacts/kong/kong-combined.yaml
+
+#       - name: Merge Experience API Configurations
+#         run: |
+#           deck file merge \
+#             .github/artifacts/kong/kong-combined.yaml experience/kong/experience-service.yaml \
+#             -o .github/artifacts/kong/kong-combined.yaml
+
+#       - name: Platform Team Kong Additions
+#         # The platform team has their own things to add to the final Kong configuration.
+#         # The platform-kong-base.yaml is a base file for any platform defaults. It will "win" over
+#         #   any settings in the domain teams Kong configurations.
+#         # Then the platform adds in some objects like plugins, consumers, vaults, etc..
+#         # Also the platform/kong/patches.yaml is used to patch anything from the upstream
+#         #   team configurations
+#         # And finally a tag is added to everything managed in this process to allow
+#         #   the deck tool to isolate what is managed here from entities that may be managed
+#         #   elsewhere or by other tools
+#         # The platform/kong/.generated/kong.yaml is the final product and is stored in the repository.
+#         #   Storing the generated file in the repo is intentional,
+#         #   it should help with PR reviews, transparency, and debugging.
+#         run: |
+#           deck file merge \
+#             .github/artifacts/kong/kong-combined.yaml \
+#             platform/kong/platform-kong-base.yaml     \
+#             platform/kong/consumers/*                 \
+#             platform/kong/plugins/*                   \
+#             platform/kong/vaults/* |                  \
+#           deck file patch \
+#             platform/kong/patches.yaml |
+#           deck file add-tags \
+#             -o platform/kong/.generated/kong.yaml \
+#             "platform-repo-managed"
+
+#       - name: Kong linting
+#         run: deck file lint -s platform/kong/.generated/kong.yaml platform/kong/lint-rulesets.yaml
+        
+#       - name: Upload Artifacts
+#         # Artifacts are the files that are built along the way of the pipeline but are not committed to the repo
+#         uses: actions/upload-artifact@v3
+#         with:
+#           name: kong-configurations
+#           path: .github/artifacts/kong/*.yaml
+
+#       - name: Create PR for changed Kong Gateway Configuration
+#         id: create_pr
+#         # The only file that should be changed for this PR is platform/kong/.generated/kong.yaml
+#         uses: peter-evans/create-pull-request@v5
+#         with:
+#           title: Stage Kong Gateway Configuration
+      
+#   # Obtain the changelog between the previous and current OAS for all services
+#   # and create a PR comment with the changelog. This is useful for tracking changes
+#   # and provides details in case of breaking changes.
+#   oas-changelog:
+#     # obtain the changelog between the previous and current OAS for all services
+#     # and create a PR comment with the changelog
+#     needs: oas-to-kong
+#     runs-on: ubuntu-latest
+#     strategy:
+#       matrix:
+#         app:
+#           - dir: flight-data
+#             name: flights
+#           - dir: flight-data
+#             name: routes
+#           - dir: sales
+#             name: bookings
+#           - dir: sales
+#             name: customer
+#     steps:
+#       - name: Checkout
+#         uses: actions/checkout@v3
+#         with:
+#           fetch-depth: 0
+#       # The base OAS file is the version of the OAS file from the previous commit
+#       - name: Base OAS
+#         run: |
+#           git show HEAD~1:${{ matrix.app.dir }}/${{ matrix.app.name }}/openapi.yaml > ${{ matrix.app.dir }}/${{ matrix.app.name }}/base.yaml
+#       - name: Obtain Changelog OAS
+#         id: oaschangelog
+#         uses: oasdiff/oasdiff-action/changelog@main
+#         with:
+#           base: ${{ matrix.app.dir }}/${{ matrix.app.name }}/base.yaml
+#           revision: ${{ matrix.app.dir }}/${{ matrix.app.name }}/openapi.yaml
+#           output-to-file: ${{ matrix.app.dir }}/${{ matrix.app.name }}/changelog.txt
+#       - name: Create PR Comment with Changelog
+#         id: create_comment
+#         if: steps.oaschangelog.outputs.changelog != 'No changelog changes'
+#         uses: peter-evans/create-or-update-comment@v4
+#         with:
+#           issue-number: ${{ needs.oas-to-kong.outputs.pull-request-number }}
+#           body-path: ${{ matrix.app.dir }}/${{ matrix.app.name }}/changelog.txt
+      
+
+
+
+
+
+
+
+
+
+# name: Kong CI/CD Workflow
+
+# on:
+#   push:
+#     branches:
+#       - main  # You can specify which branches to trigger on
+
+# env:
+#   DECK_API_NAME: "bookings"
+#   DECK_KONG_DEPLOYMENT: "dev"
+#   KONNECT_ADDR: https://us.api.konghq.com
+#   KONNECT_CONTROL_PLANE_NAME: "On Premise Hybrid Control Plane"
+#   KONNECT_TOKEN: kpat_ct0GEm09jMtlwvPfkqxOfe38TgZ80VdOU4kfVQBBb48AHaZi1
+
+# jobs:
+
+# # LINTING
+# # BREAKING CHANGES
+
+#   query-db-for-service-exposure-1:
+#     runs-on: self-hosted
+
+#     env:  # Store environment variables at the job level
+#       PGHOST: postgres.pve-1.schenkeveld.io
+#       PGPORT: 5432
+#       PGUSER: github-actions-runner
+#       PGPASSWORD: github-actions-runner
+#       PGDATABASE: service-exposure-catalog
+
+#     steps:
+#       - name: Query PostgreSQL
+#         run: |
+#           # Run query and store output
+#           RESULT=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -At -F ',' -c "SELECT service, dp_namespace, env FROM catalog WHERE service = '$DECK_API_NAME';")
+          
+#           # Check if result is empty
+#           if [ -z "$RESULT" ]; then
+#             echo "No results found. Stopping workflow."
+#             exit 1
+#           fi
+
+#   generate_kong_config:
+#     runs-on: self-hosted
+#     needs: query-db-for-service-exposure-1
+#     steps:
+#       - name: Checkout repository
+#         uses: actions/checkout@v2
+
+#       - name: Generate Kong Config
+#         run: |
+#           echo $GITHUB_SHA
+#           deck file openapi2kong -s $DECK_API_NAME/api/openapi-spec/openapi.yaml > $DECK_API_NAME/api/deck-file/generated/kong-generated.yaml
+
+#       - name: Upload Kong Generated Config
+#         uses: actions/upload-artifact@v4
+#         with:
+#           name: kong-generated.yaml
+#           path: ${{ env.DECK_API_NAME }}/api/deck-file/generated/kong-generated.yaml
+
+#   plugin_and_patch_kong_config:
+#     runs-on: self-hosted
+#     needs: generate_kong_config
+#     steps:
+#       - name: Checkout repository
+#         uses: actions/checkout@v2
+
+#         # ssh-keyscan -H github.com >> ~/.ssh/known_hosts     I CONSIDER THIS WORKER PREPARATION
+
+#       - name: Clone kong-air-common repository
+#         run: git clone git@github.com:maschenkeveld/kong-air-common.git
+
+#       - name: Download Kong Generated Config
+#         uses: actions/download-artifact@v4
+#         with:
+#           name: kong-generated.yaml
+#           path: ${{ env.DECK_API_NAME }}/api/deck-file/generated
+
+#       - name: Setup Environment Variables
+#         run: source $DECK_API_NAME/api/env-vars/env-vars
+
+#       - name: Patch Kong Config with Plugins
+#         run: |
+#           cat $DECK_API_NAME/api/deck-file/generated/kong-generated.yaml | deck file add-plugins -s - $DECK_API_NAME/api/plugins/plugins.yaml | deck file patch -s - kong-air-common/patches/patches.yaml | deck file patch -s - $DECK_API_NAME/api/patches/patches.yaml | deck file add-tags -s - $DECK_API_NAME > $DECK_API_NAME/api/deck-file/generated/kong-plugined-and-patched.yaml
+#           cat $DECK_API_NAME/api/deck-file/generated/kong-plugined-and-patched.yaml
+
+#       - name: Upload Kong Plugined and Patched Config
+#         uses: actions/upload-artifact@v4
+#         with:
+#           name: kong-plugined-and-patched.yaml
+#           path: ${{ env.DECK_API_NAME }}/api/deck-file/generated/kong-plugined-and-patched.yaml
+
+#   # diff:
+#   #   runs-on: self-hosted
+#   #   needs: plugin_and_patch_kong_config
+#   #   steps:
+#   #     - name: Checkout repository
+#   #       uses: actions/checkout@v2
+
+#   #     - name: Clone kong-air-common repository
+#   #       run: git clone git@github.com:maschenkeveld/kong-air-common.git
+
+#   #     - name: Download Kong Patched Config
+#   #       uses: actions/download-artifact@v4
+#   #       with:
+#   #         name: kong-plugined-and-patched.yaml
+#   #         path: ${{ env.DECK_API_NAME }}/api/deck-file/generated
+
+#   #     - name: Setup Environment Variables
+#   #       run: source ${{ env.DECK_API_NAME }}/api/env-vars/env-vars
+
+#   #     - name: Diff Kong Config
+#   #       run: |
+#   #         source $DECK_API_NAME/api/env-vars/env-vars
+#   #         deck gateway diff $DECK_API_NAME/api/deck-file/generated/kong-plugined-and-patched.yaml kong-air-common/plugin-templates/default-jwt.yaml --konnect-addr $KONNECT_ADDR --konnect-control-plane-name "$KONNECT_CONTROL_PLANE_NAME" --konnect-token $KONNECT_TOKEN --select-tag $DECK_API_NAME --select-tag $DECK_OWNER
+
+
+#   render_kong_config:
+#     runs-on: self-hosted
+#     needs: plugin_and_patch_kong_config
+#     steps:
+#       - name: Checkout repository
+#         uses: actions/checkout@v2
+
+#       - name: Clone kong-air-common repository
+#         run: git clone git@github.com:maschenkeveld/kong-air-common.git
+
+#       - name: Download Kong Patched Config
+#         uses: actions/download-artifact@v4
+#         with:
+#           name: kong-plugined-and-patched.yaml
+#           path: ${{ env.DECK_API_NAME }}/api/deck-file/generated
+
+#       - name: Setup Environment Variables
+#         run: source ${{ env.DECK_API_NAME }}/api/env-vars/env-vars
+
+#       - name: Render Kong Config
+#         run: |
+#           source $DECK_API_NAME/api/env-vars/env-vars
+#           deck file render $DECK_API_NAME/api/deck-file/generated/kong-plugined-and-patched.yaml kong-air-common/plugin-templates/default-jwt.yaml >  $DECK_API_NAME/api/deck-file/generated/kong-rendered.yaml
+
+#       - name: Upload Kong Rendered Config
+#         uses: actions/upload-artifact@v4
+#         with:
+#           name: kong-rendered.yaml
+#           path: ${{ env.DECK_API_NAME }}/api/deck-file/generated/kong-rendered.yaml
+
+#   kong2kic2ollama:
+#     runs-on: self-hosted
+#     needs: render_kong_config
+#     steps:
+#       - name: Checkout repository
+#         uses: actions/checkout@v2
+
+#       - name: Download Kong Rendered Config
+#         uses: actions/download-artifact@v4
+#         with:
+#           name: kong-rendered.yaml
+#           path: ${{ env.DECK_API_NAME }}/api/deck-file/generated
+
+#       - name: Setup Environment Variables
+#         run: source ${{ env.DECK_API_NAME }}/api/env-vars/env-vars
+
+#       - name: kong2kic Kong Config
+#         run: |
+#           source $DECK_API_NAME/api/env-vars/env-vars
+#           deck file kong2kic -s $DECK_API_NAME/api/deck-file/generated/kong-rendered.yaml -o $DECK_API_NAME/api/deck-file/generated/k8s.yaml
+
+#       - name: Send prompt to Ollama API using Bash
+#         env:
+#           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+#         run: |
+#           API_URL="http://10.22.0.98:11434/v1/chat/completions"
+          
+#           PROMPT="Can you transform these Kong KIC manifests: $(cat $DECK_API_NAME/api/deck-file/generated/k8s.yaml) into Kong Gateway Operator manifests like these examples: $(cat .github/gwo-examples.yaml) YAML manifests? Please only output the transformed YAML manifests as a single file, divided by --- dividers. No extra text, only the yaml."
+
+#           ESCAPED_PROMPT=$(echo $PROMPT | jq -R @json)
+
+#           echo "Ollama Prompt: $PROMPT"
+
+#           echo "Ollama Escaped Prompt: $ESCAPED_PROMPT"
+
+#           RESPONSE=$(curl http://10.22.0.98:11434/v1/chat/completions \
+#               -H "Content-Type: application/json" \
+#               -d "{\"model\": \"gemma3:1b\", \"messages\": [{\"role\": \"user\", \"content\": $ESCAPED_PROMPT }]}")
+
+
+#           echo "Ollama Response: $RESPONSE"
+
+#           # Extract the generated text from the API response
+#           GENERATED_TEXT=$(echo $RESPONSE | jq -r '.choices[0].message.content')
+
+#           # Print the response
+#           echo "Ollama Response: $GENERATED_TEXT"
+
+#           echo  $GENERATED_TEXT > $DECK_API_NAME/api/deck-file/generated/k8s_tranformed.yaml
+
+
+#       # - name: Split Kubernetes YAML
+#       #   run: |
+#       #     # Define the file path
+#       #     FILE_PATH="${{ env.DECK_API_NAME }}/api/deck-file/generated/k8s.yaml"
+#       #     OUTPUT_DIR="${{ env.DECK_API_NAME }}/api/deck-file/generated/split_manifests"
+
+#       #     # Check if the file exists
+#       #     if [[ ! -f "$FILE_PATH" ]]; then
+#       #       echo "Error: $FILE_PATH does not exist. Stopping workflow."
+#       #       exit 1
+#       #     fi
+
+#       #     # Create the output directory
+#       #     mkdir -p "$OUTPUT_DIR"
+
+#       #     # Split the YAML file at "---" dividers
+#       #     csplit --quiet --prefix="$OUTPUT_DIR/manifest" "$FILE_PATH" '/^---$/' '{*}'
+
+#       #     # Iterate over split files and rename them
+#       #     for file in "$OUTPUT_DIR"/manifest*; do
+#       #       kind=$(yq e '.kind' "$file")
+#       #       name=$(yq e '.metadata.name' "$file")
+
+#       #       # Ensure both kind and name are present before renaming
+#       #       if [[ -n "$kind" && -n "$name" ]]; then
+#       #         new_filename="$OUTPUT_DIR/${kind}_${name}.yaml"
+#       #         mv "$file" "$new_filename"
+#       #         echo "Created $new_filename"
+#       #       else
+#       #         echo "Skipping file: $file (Missing kind or name)"
+#       #       fi
+#       #     done
+
+#       # - name: Upload Split YAMLs as Artifacts
+#       #   uses: actions/upload-artifact@v4
+#       #   with:
+#       #     name: split-k8s-manifests
+#       #     path: ${{ env.DECK_API_NAME }}/api/deck-file/generated/split_manifests/*.yaml
+
+#   query-db-for-service-exposure-2:
+#     runs-on: self-hosted
+#     needs: kong2kic2ollama
+
+#     env:  # Store environment variables at the job level
+#       PGHOST: postgres.pve-1.schenkeveld.io
+#       PGPORT: 5432
+#       PGUSER: github-actions-runner
+#       PGPASSWORD: github-actions-runner
+#       PGDATABASE: service-exposure-catalog
+
+#     steps:
+#       - name: Query PostgreSQL
+#         run: |
+#           # Run query and store output
+#           RESULT=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -At -F ',' -c "SELECT service, dp_namespace, env FROM catalog WHERE service = '$DECK_API_NAME';")
+          
+#         #    echo "Processing service: $service"
+#         #     echo "Namespace: $dp_namespace"
+#         #     echo "Environment: $env"
+#         #     echo "--------------------------"
+#         #   done
+
+
+# # APPROVAL STAGE (SHOW SUMMARY OF DIFF), USE PULL TO APPROVE
+# # BACKUP STAGE -> TO ARTEFACTS
+
+#   # sync:
+#   #   runs-on: self-hosted
+#   #   needs: diff
+#   #   steps:
+#   #     - name: Checkout repository
+#   #       uses: actions/checkout@v2
+
+#   #     - name: Download Kong Patched Config
+#   #       uses: actions/download-artifact@v4
+#   #       with:
+#   #         name: kong-plugined-and-patched.yaml
+#   #         path: ${{ env.DECK_API_NAME }}/api/deck-file/generated
+
+#   #     - name: Setup Environment Variables
+#   #       run: source ${{ env.DECK_API_NAME }}/api/env-vars/env-vars
+
+#   #     - name: Diff Kong Config
+#   #       run: |
+#   #         source $DECK_API_NAME/api/env-vars/env-vars
+#   #         deck gateway sync $DECK_API_NAME/api/deck-file/generated/kong-plugined-and-patched.yaml common/plugin-templates/opentelemetry.yaml --konnect-addr $KONNECT_ADDR --konnect-control-plane-name "$KONNECT_CONTROL_PLANE_NAME" --konnect-token $KONNECT_TOKEN --select-tag $DECK_API_NAME --select-tag $DECK_OWNER
+
+# # TEST STAGE
+# # ROLLBACK STAGE
+
+#   # Optional Dump and Dump API jobs
+#   # dump:
+#   #   runs-on: self-hosted
+#   #   steps:
+#   #     - name: Checkout repository
+#   #       uses: actions/checkout@v2
+#   #
+#   #     - name: Dump Kong Data
+#   #       run: |
+#   #         export DATETIME=$(date +"%Y%m%d%H%M%S")
+#   #         deck gateway dump \
+#   #           --headers Kong-Admin-Token:2906rmoPLnrX9C9EoO7T \
+#   #           --kong-addr https://kong-admin-api-$DECK_KONG_DEPLOYMENT.kong-air.pve-1.schenkeveld.io \
+#   #           --yes \
+#   #           -o backups/kong-full-$DATETIME.yaml
+#   #
+#   # dump_api:
+#   #   runs-on: self-hosted
+#   #   if: ${{ github.event_name == 'push' }} # Trigger manually or on push
+#   #   steps:
+#   #     - name: Checkout repository
+#   #       uses: actions/checkout@v2
+#   #
+#   #     - name: Dump Kong API Data
+#   #       run: |
+#   #         export DATETIME=$(date +"%Y%m%d%H%M%S")
+#   #         deck gateway dump \
+#   #           --headers Kong-Admin-Token:2906rmoPLnrX9C9EoO7T \
+#   #           --kong-addr https://kong-admin-api-$DECK_KONG_DEPLOYMENT.kong-air.pve-1.schenkeveld.io \
+#   #           --select-tag $DECK_API_NAME \
+#   #           --yes \
+#   #           -o $DECK_API_NAME/api/deck-file/dumped/kong-$DATETIME.yaml
