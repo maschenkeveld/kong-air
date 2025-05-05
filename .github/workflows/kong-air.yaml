@@ -16,7 +16,7 @@ jobs:
 #  this job is useful to debug workflows, see https://github.com/mheap/debug-artifact
 #  debug-artifacts:
 #    name: Upload Debug Artifacts
-#    runs-on: ubuntu-latest
+#    runs-on: self-hosted
 #    steps:
 #      - name: Upload Debug Artifacts
 #        uses: mheap/debug-artifact@v1
@@ -25,7 +25,7 @@ jobs:
 
   has-changes:
     name: Have changes in apis or common
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
 
     outputs:
       are-changes: ${{ steps.changed-files.outputs.apis-or-common }}
@@ -46,7 +46,7 @@ jobs:
     name: Check breaking changes
     needs: has-changes
     if: ${{ needs.has-changes.outputs.are-changes == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
 
     strategy:
       matrix:
@@ -92,7 +92,7 @@ jobs:
     name: Contract testing
     needs: has-changes
     if: ${{ needs.has-changes.outputs.are-changes == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
 
     strategy:
       matrix:
@@ -135,7 +135,7 @@ jobs:
 #   # The test is based on the OpenAPI specifications of the services.
 #   security-test:
 #     name: Security testing
-#     runs-on: ubuntu-latest
+#     runs-on: self-hosted
 #     needs: has-changes
 #     strategy:
 #       matrix:
@@ -180,7 +180,7 @@ jobs:
 #   # Run load testing with K6. The script is generated from the OpenAPI specification.
 #   load-test:
 #     name: Load testing
-#     runs-on: ubuntu-latest
+#     runs-on: self-hosted
 #     needs: has-changes
 #     strategy:
 #       matrix:
@@ -242,7 +242,7 @@ jobs:
 #     name: Convert OAS to Kong configurations
 #     needs: [has-changes, oas-break, contract-test]
 #     if: ${{ needs.has-changes.outputs.are-changes == 'true' }}
-#     runs-on: ubuntu-latest
+#     runs-on: self-hosted
 #     outputs:
 #       pull-request-number: ${{ steps.create_pr.outputs.pull-request-number }}
 
@@ -355,7 +355,7 @@ jobs:
 #     # obtain the changelog between the previous and current OAS for all services
 #     # and create a PR comment with the changelog
 #     needs: oas-to-kong
-#     runs-on: ubuntu-latest
+#     runs-on: self-hosted
 #     strategy:
 #       matrix:
 #         app:
