@@ -64,7 +64,12 @@ jobs:
 
       - name: Base OAS
         run: |
-          git show HEAD~1:${{ matrix.app.path }}/openapi-spec.yaml > ${{ matrix.app.path }}/base.yaml
+          if git show HEAD~1:${{ matrix.app.path }}/openapi-spec.yaml > /dev/null 2>&1; then
+            git show HEAD~1:${{ matrix.app.path }}/openapi-spec.yaml > ${{ matrix.app.path }}/base.yaml
+          else
+            echo "No previous version of OAS found. Creating empty base.yaml."
+            touch ${{ matrix.app.path }}/base.yaml
+          fi
 
       - name: Check OAS breaking changes
         uses: oasdiff/oasdiff-action/breaking@main
