@@ -5,7 +5,7 @@ PORT=$2        # e.g., 9000 or 9001
 
 IMAGE="nexus.pve-1.schenkeveld.io:8444/mesh-crawler:go-1.0.19"
 
-docker run -d \
+sudo docker run -d \
   --rm \
   --name "$SERVICE" \
   -e PORT="$PORT" \
