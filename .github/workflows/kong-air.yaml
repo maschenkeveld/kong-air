@@ -88,45 +88,48 @@ jobs:
         with:
           filename: .github/ISSUE_TEMPLATE/breaking-change.md
 
-#   # Run contract testing with SchemaThesis.
-#   # The tests are based on the OpenAPI specifications of the services.
-#   contract-test:
-#     name: Contract testing
-#     needs: has-changes
-#     runs-on: ubuntu-latest
-#     steps:
-#       - name: Checkout
-#         uses: actions/checkout@v3
-#       # Start the API implementation services and execute contract testing
-#       # If you have a schemathesis token, you can uncomment the token line and use it
-#       - name: Start services
-#         run: chmod +x run-all.sh && ./run-all.sh
-#       - name: Contract testing flights
-#         uses: schemathesis/action@v1
-#         with:
-#           schema: flight-data/flights/openapi.yaml
-#           base-url: http://localhost:8080
-#           #token: ${{ secrets.SCHEMATHESIS_TOKEN }}
-#       - name: Contract testing routes
-#         uses: schemathesis/action@v1
-#         with:
-#           schema: flight-data/routes/openapi.yaml
-#           base-url: http://localhost:8081
-#           #token: ${{ secrets.SCHEMATHESIS_TOKEN }}
-#       - name: Contract testing bookings
-#         uses: schemathesis/action@v1
-#         with:
-#           schema: sales/bookings/openapi.yaml
-#           base-url: http://localhost:8082
-#           args: '-H "x-consumer-username: dfreese"'
-#           #token: ${{ secrets.SCHEMATHESIS_TOKEN }}
-#       - name: Contract testing customer
-#         uses: schemathesis/action@v1
-#         with:
-#           schema: sales/customer/openapi.yaml
-#           base-url: http://localhost:8083
-#           args: '-H "x-consumer-username: jsmith"'
-#           #token: ${{ secrets.SCHEMATHESIS_TOKEN }}
+  contract-test:
+    name: Contract testing
+    needs: has-changes
+    if: ${{ needs.has-changes.outputs.are-changes == 'true' }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        app:
+          - name: alice
+            schema: apis/alice/openapi-spec/openapi-spec.yaml
+            port: 9000
+          - name: bob
+            schema: apis/bob/openapi-spec/openapi-spec.yaml
+            port: 9001
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Start ${{ matrix.app.name }} service
+        run: ./start.sh ${{ matrix.app.name }} ${{ matrix.app.port }}
+
+      - name: Wait for service to be ready
+        run: |
+          for i in {1..30}; do
+            if curl -s http://localhost:${{ matrix.app.port }} > /dev/null; then
+              echo "Service is up!"
+              exit 0
+            fi
+            echo "Waiting for service..."
+            sleep 2
+          done
+          echo "Service failed to start in time."
+          exit 1
+
+      - name: Contract testing ${{ matrix.app.name }}
+        uses: schemathesis/action@v1
+        with:
+          schema: ${{ matrix.app.schema }}
+          base-url: http://localhost:${{ matrix.app.port }}
+
 
 #   # Run security testing with OWASP ZAP Scan.
 #   # The test is based on the OpenAPI specifications of the services.
