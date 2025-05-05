@@ -4,7 +4,7 @@ info:
   version: 1.0.0
 
 servers:
-  - url: http://kong-proxy-dp-1-konnect-eu-default.shared.pve-1.schenkeveld.io/alice
+  - url: http://update.kong-air.pve-1.schenkeveld.io/alice
 
 components:
   securitySchemes:
