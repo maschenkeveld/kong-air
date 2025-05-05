@@ -79,10 +79,10 @@ components:
         status:
           type: string
 
-security:
-  - ApiKeyAuth: []
-  - BearerAuth: []
-  - OAuth2: []
+# security:
+#   - ApiKeyAuth: []
+#   - BearerAuth: []
+#   - OAuth2: []
 
 paths:
   /metrics:
