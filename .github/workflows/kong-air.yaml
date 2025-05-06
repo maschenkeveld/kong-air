@@ -237,103 +237,6 @@ jobs:
 #           curl https://github.com/grafana/k6/releases/download/v0.52.0/k6-v0.52.0-linux-amd64.tar.gz -L | tar xvz --strip-components 1
 #           ./k6 run '${{ matrix.app.dir }}/${{ matrix.app.name }}/k6/script.js' --vus 10 --duration 10s
 
-
-#   oas-to-kong:
-#     name: Convert OAS to Kong configurations
-#     needs: [has-changes, oas-break, contract-test]
-#     if: ${{ needs.has-changes.outputs.are-changes == 'true' }}
-#     runs-on: self-hosted
-#     outputs:
-#       pull-request-number: ${{ steps.create_pr.outputs.pull-request-number }}
-
-#     steps:
-#       - name: Checkout
-#         uses: actions/checkout@v3
-#       - name: Setup deck
-#         uses: kong/setup-deck@v1
-#         with:
-#           deck-version: '1.38.0'
-#           wrapper: false
-
-#       - name: Convert Flights API to Kong
-#         # In multiple steps, convert the OpenAPI Spec to a Kong declarative configuration
-#         #   and then patch the result with the data in the kong/patches.yaml
-#         #   and apply some tags
-#         run: |
-#           deck file openapi2kong -s flight-data/flights/openapi.yaml | \
-#             deck file patch flight-data/flights/kong/patches.yaml | \
-#             deck file add-tags -o .github/artifacts/kong/flight-data-flights-kong.yaml \
-#               --selector "$.services[*]" --selector "$.services[*].routes[*]" flight-data
-
-
-#       - name: Convert Routes API to Kong
-#         # In two steps, convert the OpenAPI Spec to a Kong declarative configuration
-#         #   and then patch the result with the data in the kong/patches.yaml
-#         run: |
-#           deck file openapi2kong -s flight-data/routes/openapi.yaml | \
-#             deck file patch flight-data/routes/kong/patches.yaml | \
-#             deck file add-tags -o .github/artifacts/kong/flight-data-routes-kong.yaml \
-#               --selector "$.services[*]" --selector "$.services[*].routes[*]" flight-data
-
-#       - name: Convert Bookings API to Kong
-#         # In two steps, convert the OpenAPI Spec to a Kong declarative configuration
-#         #   and then patch the result with the data in the kong/patches.yaml
-#         run: |
-#           deck file openapi2kong -s sales/bookings/openapi.yaml | \
-#             deck file patch  sales/bookings/kong/patches.yaml | \
-#             deck file add-tags -o .github/artifacts/kong/sales-bookings-kong.yaml \
-#               --selector "$.services[*]" --selector "$.services[*].routes[*]" sales
-
-#       - name: Convert Customers API to Kong
-#         # In two steps, convert the OpenAPI Spec to a Kong declarative configuration
-#         #   and then patch the result with the data in the kong/patches.yaml
-#         run: |
-#           deck file openapi2kong -s sales/customer/openapi.yaml | \
-#             deck file patch sales/customer/kong/patches.yaml | \
-#             deck file add-tags -o .github/artifacts/kong/sales-customer-kong.yaml --selector "$.services[*]" \
-#               --selector "$.services[*].routes[*]" sales
-
-#       - name: Combine Kong Configurations
-#         # Combine all the previous OAS->Kong configurations into one and put it in a well known place
-#         run: |
-#           deck file merge \
-#             .github/artifacts/kong/*-kong.yaml -o .github/artifacts/kong/kong-combined.yaml
-
-#       - name: Merge Experience API Configurations
-#         run: |
-#           deck file merge \
-#             .github/artifacts/kong/kong-combined.yaml experience/kong/experience-service.yaml \
-#             -o .github/artifacts/kong/kong-combined.yaml
-
-#       - name: Platform Team Kong Additions
-#         # The platform team has their own things to add to the final Kong configuration.
-#         # The platform-kong-base.yaml is a base file for any platform defaults. It will "win" over
-#         #   any settings in the domain teams Kong configurations.
-#         # Then the platform adds in some objects like plugins, consumers, vaults, etc..
-#         # Also the platform/kong/patches.yaml is used to patch anything from the upstream
-#         #   team configurations
-#         # And finally a tag is added to everything managed in this process to allow
-#         #   the deck tool to isolate what is managed here from entities that may be managed
-#         #   elsewhere or by other tools
-#         # The platform/kong/.generated/kong.yaml is the final product and is stored in the repository.
-#         #   Storing the generated file in the repo is intentional,
-#         #   it should help with PR reviews, transparency, and debugging.
-#         run: |
-#           deck file merge \
-#             .github/artifacts/kong/kong-combined.yaml \
-#             platform/kong/platform-kong-base.yaml     \
-#             platform/kong/consumers/*                 \
-#             platform/kong/plugins/*                   \
-#             platform/kong/vaults/* |                  \
-#           deck file patch \
-#             platform/kong/patches.yaml |
-#           deck file add-tags \
-#             -o platform/kong/.generated/kong.yaml \
-#             "platform-repo-managed"
-
-#       - name: Kong linting
-#         run: deck file lint -s platform/kong/.generated/kong.yaml platform/kong/lint-rulesets.yaml
-        
 #       - name: Upload Artifacts
 #         # Artifacts are the files that are built along the way of the pipeline but are not committed to the repo
 #         uses: actions/upload-artifact@v3
@@ -390,299 +293,145 @@ jobs:
 #         with:
 #           issue-number: ${{ needs.oas-to-kong.outputs.pull-request-number }}
 #           body-path: ${{ matrix.app.dir }}/${{ matrix.app.name }}/changelog.txt
-      
 
+  generate_kong_config:
+    runs-on: self-hosted
+    strategy:
+      matrix:
+        app:
+          - name: alice
+            path: apis/alice
+          - name: bob
+            path: apis/bob
+    env:
+      DECK_API_NAME: ${{ matrix.app.name }}
+      DECK_API_PATH: ${{ matrix.app.path }}
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Generate Kong Config
+        run: |
+          deck file openapi2kong -s $DECK_API_PATH/openapi-spec/openapi-spec.yaml \
+            > $DECK_API_PATH/deck-file/generated/kong-generated.yaml
+
+      - name: Upload Kong Generated Config
+        uses: actions/upload-artifact@v4
+        with:
+          name: kong-generated-${{ matrix.app.name }}.yaml
+          path: ${{ env.DECK_API_PATH }}/deck-file/generated/kong-generated.yaml
+
+  plugin_and_patch_kong_config:
+    runs-on: self-hosted
+    needs: generate_kong_config
+    strategy:
+      matrix:
+        app:
+          - name: alice
+            path: apis/alice
+          - name: bob
+            path: apis/bob
+    env:
+      DECK_API_NAME: ${{ matrix.app.name }}
+      DECK_API_PATH: ${{ matrix.app.path }}
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Clone kong-air-common repository
+        run: git clone git@github.com:maschenkeveld/kong-air-common.git
+
+      - name: Download Kong Generated Config
+        uses: actions/download-artifact@v4
+        with:
+          name: kong-generated-${{ matrix.app.name }}.yaml
+          path: ${{ env.DECK_API_PATH }}/deck-file/generated
+
+      - name: Setup Environment Variables
+        run: source $DECK_API_PATH/env-vars/env-vars
+
+      - name: Patch Kong Config with Plugins
+        run: |
+          deck file add-plugins -s $DECK_API_PATH/deck-file/generated/kong-generated.yaml \
+            $DECK_API_PATH/plugins/plugins.yaml \
+          | deck file patch -s - kong-air-common/patches/patches.yaml \
+          | deck file patch -s - $DECK_API_PATH/patches/patches.yaml \
+          | deck file add-tags -s - $DECK_API_NAME \
+          > $DECK_API_PATH/deck-file/generated/kong-plugined-and-patched.yaml
+
+      - name: Upload Kong Plugined and Patched Config
+        uses: actions/upload-artifact@v4
+        with:
+          name: kong-plugined-and-patched-${{ matrix.app.name }}.yaml
+          path: ${{ env.DECK_API_PATH }}/deck-file/generated/kong-plugined-and-patched.yaml
+
+  diff:
+    runs-on: self-hosted
+    needs: plugin_and_patch_kong_config
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Clone kong-air-common repository
+        run: git clone git@github.com:maschenkeveld/kong-air-common.git
+
+      - name: Diff all apps sequentially
+        run: |
+          declare -a apps=("alice" "bob")
+          for app in "${apps[@]}"; do
+            echo "Processing diff for $app"
+            path="apis/$app"
+            mkdir -p $path/deck-file/generated
+            artifact_name=kong-plugined-and-patched-$app.yaml
+
+            echo "Downloading $artifact_name"
+            gh run download --name "$artifact_name" --dir "$path/deck-file/generated"
+
+            echo "Sourcing env vars"
+            source "$path/env-vars/env-vars"
+
+            echo "Running deck diff for $app"
+            deck gateway diff $path/deck-file/generated/kong-plugined-and-patched.yaml \
+              kong-air-common/plugin-templates/default-jwt.yaml \
+              --konnect-addr "$KONNECT_ADDR" \
+              --konnect-control-plane-name "$KONNECT_CONTROL_PLANE_NAME" \
+              --konnect-token "$KONNECT_TOKEN" \
+              --select-tag "$app" \
+              --select-tag "$DECK_OWNER"
+          done
+
+  # sync:
+  #   runs-on: self-hosted
+  #   needs: diff
+  #   steps:
+  #     - uses: actions/checkout@v2
+
+  #     - name: Sync all apps sequentially
+  #       run: |
+  #         declare -a apps=("alice" "bob")
+  #         for app in "${apps[@]}"; do
+  #           echo "Processing sync for $app"
+  #           path="apis/$app"
+  #           mkdir -p $path/deck-file/generated
+  #           artifact_name=kong-plugined-and-patched-$app.yaml
+
+  #           echo "Downloading $artifact_name"
+  #           gh run download --name "$artifact_name" --dir "$path/deck-file/generated"
+
+  #           echo "Sourcing env vars"
+  #           source "$path/env-vars/env-vars"
+
+  #           echo "Running deck sync for $app"
+  #           deck gateway sync $path/deck-file/generated/kong-plugined-and-patched.yaml \
+  #             common/plugin-templates/opentelemetry.yaml \
+  #             --konnect-addr "$KONNECT_ADDR" \
+  #             --konnect-control-plane-name "$KONNECT_CONTROL_PLANE_NAME" \
+  #             --konnect-token "$KONNECT_TOKEN" \
+  #             --select-tag "$app" \
+  #             --select-tag "$DECK_OWNER"
+  #         done
 
 
 
-
-
-
-
-
-# name: Kong CI/CD Workflow
-
-# on:
-#   push:
-#     branches:
-#       - main  # You can specify which branches to trigger on
-
-# env:
-#   DECK_API_NAME: "bookings"
-#   DECK_KONG_DEPLOYMENT: "dev"
-#   KONNECT_ADDR: https://us.api.konghq.com
-#   KONNECT_CONTROL_PLANE_NAME: "On Premise Hybrid Control Plane"
-#   KONNECT_TOKEN: kpat_ct0GEm09jMtlwvPfkqxOfe38TgZ80VdOU4kfVQBBb48AHaZi1
-
-# jobs:
-
-# # LINTING
-# # BREAKING CHANGES
-
-#   query-db-for-service-exposure-1:
-#     runs-on: self-hosted
-
-#     env:  # Store environment variables at the job level
-#       PGHOST: postgres.pve-1.schenkeveld.io
-#       PGPORT: 5432
-#       PGUSER: github-actions-runner
-#       PGPASSWORD: github-actions-runner
-#       PGDATABASE: service-exposure-catalog
-
-#     steps:
-#       - name: Query PostgreSQL
-#         run: |
-#           # Run query and store output
-#           RESULT=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -At -F ',' -c "SELECT service, dp_namespace, env FROM catalog WHERE service = '$DECK_API_NAME';")
-          
-#           # Check if result is empty
-#           if [ -z "$RESULT" ]; then
-#             echo "No results found. Stopping workflow."
-#             exit 1
-#           fi
-
-#   generate_kong_config:
-#     runs-on: self-hosted
-#     needs: query-db-for-service-exposure-1
-#     steps:
-#       - name: Checkout repository
-#         uses: actions/checkout@v2
-
-#       - name: Generate Kong Config
-#         run: |
-#           echo $GITHUB_SHA
-#           deck file openapi2kong -s $DECK_API_NAME/api/openapi-spec/openapi.yaml > $DECK_API_NAME/api/deck-file/generated/kong-generated.yaml
-
-#       - name: Upload Kong Generated Config
-#         uses: actions/upload-artifact@v4
-#         with:
-#           name: kong-generated.yaml
-#           path: ${{ env.DECK_API_NAME }}/api/deck-file/generated/kong-generated.yaml
-
-#   plugin_and_patch_kong_config:
-#     runs-on: self-hosted
-#     needs: generate_kong_config
-#     steps:
-#       - name: Checkout repository
-#         uses: actions/checkout@v2
-
-#         # ssh-keyscan -H github.com >> ~/.ssh/known_hosts     I CONSIDER THIS WORKER PREPARATION
-
-#       - name: Clone kong-air-common repository
-#         run: git clone git@github.com:maschenkeveld/kong-air-common.git
-
-#       - name: Download Kong Generated Config
-#         uses: actions/download-artifact@v4
-#         with:
-#           name: kong-generated.yaml
-#           path: ${{ env.DECK_API_NAME }}/api/deck-file/generated
-
-#       - name: Setup Environment Variables
-#         run: source $DECK_API_NAME/api/env-vars/env-vars
-
-#       - name: Patch Kong Config with Plugins
-#         run: |
-#           cat $DECK_API_NAME/api/deck-file/generated/kong-generated.yaml | deck file add-plugins -s - $DECK_API_NAME/api/plugins/plugins.yaml | deck file patch -s - kong-air-common/patches/patches.yaml | deck file patch -s - $DECK_API_NAME/api/patches/patches.yaml | deck file add-tags -s - $DECK_API_NAME > $DECK_API_NAME/api/deck-file/generated/kong-plugined-and-patched.yaml
-#           cat $DECK_API_NAME/api/deck-file/generated/kong-plugined-and-patched.yaml
-
-#       - name: Upload Kong Plugined and Patched Config
-#         uses: actions/upload-artifact@v4
-#         with:
-#           name: kong-plugined-and-patched.yaml
-#           path: ${{ env.DECK_API_NAME }}/api/deck-file/generated/kong-plugined-and-patched.yaml
-
-#   # diff:
-#   #   runs-on: self-hosted
-#   #   needs: plugin_and_patch_kong_config
-#   #   steps:
-#   #     - name: Checkout repository
-#   #       uses: actions/checkout@v2
-
-#   #     - name: Clone kong-air-common repository
-#   #       run: git clone git@github.com:maschenkeveld/kong-air-common.git
-
-#   #     - name: Download Kong Patched Config
-#   #       uses: actions/download-artifact@v4
-#   #       with:
-#   #         name: kong-plugined-and-patched.yaml
-#   #         path: ${{ env.DECK_API_NAME }}/api/deck-file/generated
-
-#   #     - name: Setup Environment Variables
-#   #       run: source ${{ env.DECK_API_NAME }}/api/env-vars/env-vars
-
-#   #     - name: Diff Kong Config
-#   #       run: |
-#   #         source $DECK_API_NAME/api/env-vars/env-vars
-#   #         deck gateway diff $DECK_API_NAME/api/deck-file/generated/kong-plugined-and-patched.yaml kong-air-common/plugin-templates/default-jwt.yaml --konnect-addr $KONNECT_ADDR --konnect-control-plane-name "$KONNECT_CONTROL_PLANE_NAME" --konnect-token $KONNECT_TOKEN --select-tag $DECK_API_NAME --select-tag $DECK_OWNER
-
-
-#   render_kong_config:
-#     runs-on: self-hosted
-#     needs: plugin_and_patch_kong_config
-#     steps:
-#       - name: Checkout repository
-#         uses: actions/checkout@v2
-
-#       - name: Clone kong-air-common repository
-#         run: git clone git@github.com:maschenkeveld/kong-air-common.git
-
-#       - name: Download Kong Patched Config
-#         uses: actions/download-artifact@v4
-#         with:
-#           name: kong-plugined-and-patched.yaml
-#           path: ${{ env.DECK_API_NAME }}/api/deck-file/generated
-
-#       - name: Setup Environment Variables
-#         run: source ${{ env.DECK_API_NAME }}/api/env-vars/env-vars
-
-#       - name: Render Kong Config
-#         run: |
-#           source $DECK_API_NAME/api/env-vars/env-vars
-#           deck file render $DECK_API_NAME/api/deck-file/generated/kong-plugined-and-patched.yaml kong-air-common/plugin-templates/default-jwt.yaml >  $DECK_API_NAME/api/deck-file/generated/kong-rendered.yaml
-
-#       - name: Upload Kong Rendered Config
-#         uses: actions/upload-artifact@v4
-#         with:
-#           name: kong-rendered.yaml
-#           path: ${{ env.DECK_API_NAME }}/api/deck-file/generated/kong-rendered.yaml
-
-#   kong2kic2ollama:
-#     runs-on: self-hosted
-#     needs: render_kong_config
-#     steps:
-#       - name: Checkout repository
-#         uses: actions/checkout@v2
-
-#       - name: Download Kong Rendered Config
-#         uses: actions/download-artifact@v4
-#         with:
-#           name: kong-rendered.yaml
-#           path: ${{ env.DECK_API_NAME }}/api/deck-file/generated
-
-#       - name: Setup Environment Variables
-#         run: source ${{ env.DECK_API_NAME }}/api/env-vars/env-vars
-
-#       - name: kong2kic Kong Config
-#         run: |
-#           source $DECK_API_NAME/api/env-vars/env-vars
-#           deck file kong2kic -s $DECK_API_NAME/api/deck-file/generated/kong-rendered.yaml -o $DECK_API_NAME/api/deck-file/generated/k8s.yaml
-
-#       - name: Send prompt to Ollama API using Bash
-#         env:
-#           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-#         run: |
-#           API_URL="http://10.22.0.98:11434/v1/chat/completions"
-          
-#           PROMPT="Can you transform these Kong KIC manifests: $(cat $DECK_API_NAME/api/deck-file/generated/k8s.yaml) into Kong Gateway Operator manifests like these examples: $(cat .github/gwo-examples.yaml) YAML manifests? Please only output the transformed YAML manifests as a single file, divided by --- dividers. No extra text, only the yaml."
-
-#           ESCAPED_PROMPT=$(echo $PROMPT | jq -R @json)
-
-#           echo "Ollama Prompt: $PROMPT"
-
-#           echo "Ollama Escaped Prompt: $ESCAPED_PROMPT"
-
-#           RESPONSE=$(curl http://10.22.0.98:11434/v1/chat/completions \
-#               -H "Content-Type: application/json" \
-#               -d "{\"model\": \"gemma3:1b\", \"messages\": [{\"role\": \"user\", \"content\": $ESCAPED_PROMPT }]}")
-
-
-#           echo "Ollama Response: $RESPONSE"
-
-#           # Extract the generated text from the API response
-#           GENERATED_TEXT=$(echo $RESPONSE | jq -r '.choices[0].message.content')
-
-#           # Print the response
-#           echo "Ollama Response: $GENERATED_TEXT"
-
-#           echo  $GENERATED_TEXT > $DECK_API_NAME/api/deck-file/generated/k8s_tranformed.yaml
-
-
-#       # - name: Split Kubernetes YAML
-#       #   run: |
-#       #     # Define the file path
-#       #     FILE_PATH="${{ env.DECK_API_NAME }}/api/deck-file/generated/k8s.yaml"
-#       #     OUTPUT_DIR="${{ env.DECK_API_NAME }}/api/deck-file/generated/split_manifests"
-
-#       #     # Check if the file exists
-#       #     if [[ ! -f "$FILE_PATH" ]]; then
-#       #       echo "Error: $FILE_PATH does not exist. Stopping workflow."
-#       #       exit 1
-#       #     fi
-
-#       #     # Create the output directory
-#       #     mkdir -p "$OUTPUT_DIR"
-
-#       #     # Split the YAML file at "---" dividers
-#       #     csplit --quiet --prefix="$OUTPUT_DIR/manifest" "$FILE_PATH" '/^---$/' '{*}'
-
-#       #     # Iterate over split files and rename them
-#       #     for file in "$OUTPUT_DIR"/manifest*; do
-#       #       kind=$(yq e '.kind' "$file")
-#       #       name=$(yq e '.metadata.name' "$file")
-
-#       #       # Ensure both kind and name are present before renaming
-#       #       if [[ -n "$kind" && -n "$name" ]]; then
-#       #         new_filename="$OUTPUT_DIR/${kind}_${name}.yaml"
-#       #         mv "$file" "$new_filename"
-#       #         echo "Created $new_filename"
-#       #       else
-#       #         echo "Skipping file: $file (Missing kind or name)"
-#       #       fi
-#       #     done
-
-#       # - name: Upload Split YAMLs as Artifacts
-#       #   uses: actions/upload-artifact@v4
-#       #   with:
-#       #     name: split-k8s-manifests
-#       #     path: ${{ env.DECK_API_NAME }}/api/deck-file/generated/split_manifests/*.yaml
-
-#   query-db-for-service-exposure-2:
-#     runs-on: self-hosted
-#     needs: kong2kic2ollama
-
-#     env:  # Store environment variables at the job level
-#       PGHOST: postgres.pve-1.schenkeveld.io
-#       PGPORT: 5432
-#       PGUSER: github-actions-runner
-#       PGPASSWORD: github-actions-runner
-#       PGDATABASE: service-exposure-catalog
-
-#     steps:
-#       - name: Query PostgreSQL
-#         run: |
-#           # Run query and store output
-#           RESULT=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -At -F ',' -c "SELECT service, dp_namespace, env FROM catalog WHERE service = '$DECK_API_NAME';")
-          
-#         #    echo "Processing service: $service"
-#         #     echo "Namespace: $dp_namespace"
-#         #     echo "Environment: $env"
-#         #     echo "--------------------------"
-#         #   done
-
-
-# # APPROVAL STAGE (SHOW SUMMARY OF DIFF), USE PULL TO APPROVE
-# # BACKUP STAGE -> TO ARTEFACTS
-
-#   # sync:
-#   #   runs-on: self-hosted
-#   #   needs: diff
-#   #   steps:
-#   #     - name: Checkout repository
-#   #       uses: actions/checkout@v2
-
-#   #     - name: Download Kong Patched Config
-#   #       uses: actions/download-artifact@v4
-#   #       with:
-#   #         name: kong-plugined-and-patched.yaml
-#   #         path: ${{ env.DECK_API_NAME }}/api/deck-file/generated
-
-#   #     - name: Setup Environment Variables
-#   #       run: source ${{ env.DECK_API_NAME }}/api/env-vars/env-vars
-
-#   #     - name: Diff Kong Config
-#   #       run: |
-#   #         source $DECK_API_NAME/api/env-vars/env-vars
-#   #         deck gateway sync $DECK_API_NAME/api/deck-file/generated/kong-plugined-and-patched.yaml common/plugin-templates/opentelemetry.yaml --konnect-addr $KONNECT_ADDR --konnect-control-plane-name "$KONNECT_CONTROL_PLANE_NAME" --konnect-token $KONNECT_TOKEN --select-tag $DECK_API_NAME --select-tag $DECK_OWNER
 
 # # TEST STAGE
 # # ROLLBACK STAGE
