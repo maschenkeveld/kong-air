@@ -338,9 +338,6 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - name: Clone kong-air-common repository
-        run: git clone git@github.com:maschenkeveld/kong-air-common.git
-
       - name: Download Kong Generated Config
         uses: actions/download-artifact@v4
         with:
@@ -354,8 +351,8 @@ jobs:
         run: |
           deck file add-plugins -s $DECK_API_PATH/deck-file/generated/kong-generated.yaml \
             $DECK_API_PATH/plugins/plugins.yaml \
-          | deck file patch -s - kong-air-common/patches/patches.yaml \
-          | deck file patch -s - $DECK_API_PATH/patches/patches.yaml \
+          | deck file patch -s - common/patches/deck.yaml \
+          | deck file patch -s - $DECK_API_PATH/patches/deck.yaml \
           | deck file add-tags -s - $DECK_API_NAME \
           > $DECK_API_PATH/deck-file/generated/kong-plugined-and-patched.yaml
 
@@ -370,9 +367,6 @@ jobs:
     needs: plugin_and_patch_kong_config
     steps:
       - uses: actions/checkout@v2
-
-      - name: Clone kong-air-common repository
-        run: git clone git@github.com:maschenkeveld/kong-air-common.git
 
       - name: Diff all apps sequentially
         run: |
@@ -391,7 +385,7 @@ jobs:
 
             echo "Running deck diff for $app"
             deck gateway diff $path/deck-file/generated/kong-plugined-and-patched.yaml \
-              kong-air-common/plugin-templates/default-jwt.yaml \
+              common/plugin-templates/opentelemetry.yaml \
               --konnect-addr "$KONNECT_ADDR" \
               --konnect-control-plane-name "$KONNECT_CONTROL_PLANE_NAME" \
               --konnect-token "$KONNECT_TOKEN" \
