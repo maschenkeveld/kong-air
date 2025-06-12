@@ -11,7 +11,7 @@
     - patches: Patches that will be applied to the generated decK file, to be used with env-vars
     - plugins: Plugins that will be applied to the generated decK file, can be used with common/plugin-templates
 
-- **common**: This is common plugins and patches live, which are environment specific but not API specific
+- **common**: This is where common plugins and patches live, which are environment specific but not API specific
     - env-vars: Environment (dev, test, staging, prod) specific variables, to be used with patches
     - patches: Patches that will be applied to the generated decK file, to be used with env-vars
     - plugin-templates: Templates for plugins that will be applied to APIs, the templated part is the part of the configuration that will be the same for all APIs
