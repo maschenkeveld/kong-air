@@ -1,2 +1,0 @@
-export DECK_SERVICE_BACKEND_HOSTNAME=alice_alice_svc_8080.mesh
-export DECK_SERVICE_BACKEND_PORT=80
